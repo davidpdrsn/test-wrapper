@@ -1,0 +1,6 @@
+[workspace]
+
+members = [
+    "test-wrapper",
+    "test-wrapper-code-gen",
+]
