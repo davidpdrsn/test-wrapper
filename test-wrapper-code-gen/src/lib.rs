@@ -17,9 +17,11 @@ pub fn test_(
                 name: std::stringify!(#name),
                 file: std::file!(),
                 line: std::line!(),
-                handler: std::boxed::Box::new(|| {
-                    #block
-                }),
+                handler: std::sync::Arc::new(
+                    std::boxed::Box::new(|| {
+                        #block
+                    })
+                ),
             }
         }
     };

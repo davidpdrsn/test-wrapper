@@ -1,13 +1,16 @@
+use std::env::var;
 use std::fmt;
 use std::panic::RefUnwindSafe;
+use std::sync::Arc;
 
 pub use test_wrapper_code_gen::test_;
 
+#[derive(Clone)]
 pub struct Test {
     pub name: &'static str,
     pub line: u32,
     pub file: &'static str,
-    pub handler: Box<dyn Fn() + RefUnwindSafe>,
+    pub handler: Arc<Box<dyn Fn() + RefUnwindSafe>>,
 }
 
 impl Test {
@@ -49,10 +52,48 @@ enum TestOutput {
 inventory::collect!(Test);
 
 pub fn run_all_tests() {
+    let mut all_tests = gather_all_tests();
+
+    match (var("TEST_WRAPPER_FILE"), var("TEST_WRAPPER_LINE")) {
+        (Err(_), Ok(_)) => {
+            panic!("You must also set TEST_WRAPPER_FILE when using TEST_WRAPPER_LINE")
+        }
+        _ => {}
+    }
+
+    if let Ok(file) = var("TEST_WRAPPER_FILE") {
+        all_tests = all_tests
+            .into_iter()
+            .filter(|test| test.file == file)
+            .collect();
+
+        if let Ok(line) = var("TEST_WRAPPER_LINE") {
+            all_tests = find_test_closest_to_line(
+                all_tests,
+                line.parse()
+                    .expect("expected TEST_WRAPPER_LINE to be a number"),
+            )
+            .into_iter()
+            .collect();
+        }
+    }
+
+    run_tests_and_print_output(all_tests);
+}
+
+fn gather_all_tests() -> Vec<Test> {
+    let mut all_tests = Vec::new();
+    for test in inventory::iter::<Test> {
+        all_tests.push(test.clone());
+    }
+    all_tests
+}
+
+fn run_tests_and_print_output(tests: Vec<Test>) {
     let mut passed_tests = Vec::new();
     let mut failed_tests = Vec::new();
 
-    for test in inventory::iter::<Test> {
+    for test in tests {
         let output = test.run();
         match output {
             TestOutput::Pass => {
@@ -65,7 +106,14 @@ pub fn run_all_tests() {
     }
 
     if !failed_tests.is_empty() {
-        panic!(
+        println!(
+            "{} passed, {} failures",
+            passed_tests.len(),
+            failed_tests.len()
+        );
+        std::process::exit(1);
+    } else {
+        println!(
             "{} passed, {} failures",
             passed_tests.len(),
             failed_tests.len()
@@ -90,4 +138,104 @@ macro_rules! setup {
             $crate::run_all_tests();
         }
     };
+}
+
+fn find_test_closest_to_line(tests: Vec<Test>, line: u32) -> Option<Test> {
+    tests
+        .into_iter()
+        .filter(|test| test.line <= line)
+        .min_by_key(|test| line - test.line)
+}
+
+#[cfg(test)]
+mod test {
+    #[allow(unused_imports)]
+    use super::*;
+
+    #[test]
+    fn no_tests() {
+        let all_tests = vec![];
+
+        let test_found = find_test_closest_to_line(all_tests, 1);
+
+        assert!(test_found.is_none());
+    }
+
+    #[test]
+    fn only_one_test_exact_match() {
+        let all_tests = vec![Test {
+            name: "foo",
+            line: 1,
+            file: "bar",
+            handler: Arc::new(Box::new(|| {})),
+        }];
+
+        let test_found = find_test_closest_to_line(all_tests.clone(), 1);
+
+        assert_eq!(test_found.unwrap().name, all_tests[0].name);
+    }
+
+    #[test]
+    fn only_one_test_not_exact_match() {
+        let all_tests = vec![Test {
+            name: "foo",
+            line: 1,
+            file: "bar",
+            handler: Arc::new(Box::new(|| {})),
+        }];
+
+        let test_found = find_test_closest_to_line(all_tests.clone(), 10);
+
+        assert_eq!(test_found.unwrap().name, all_tests[0].name);
+    }
+
+    #[test]
+    fn more_than_one() {
+        let all_tests = vec![
+            Test {
+                name: "foo",
+                line: 1,
+                file: "bar",
+                handler: Arc::new(Box::new(|| {})),
+            },
+            Test {
+                name: "bar",
+                line: 10,
+                file: "bar",
+                handler: Arc::new(Box::new(|| {})),
+            },
+        ];
+
+        let test_found = find_test_closest_to_line(all_tests, 10);
+
+        assert_eq!(test_found.unwrap().name, "bar");
+    }
+
+    #[test]
+    fn line_zero() {
+        let all_tests = vec![Test {
+            name: "foo",
+            line: 1,
+            file: "bar",
+            handler: Arc::new(Box::new(|| {})),
+        }];
+
+        let test_found = find_test_closest_to_line(all_tests, 0);
+
+        assert!(test_found.is_none());
+    }
+
+    #[test]
+    fn very_high_line_number() {
+        let all_tests = vec![Test {
+            name: "foo",
+            line: 1,
+            file: "bar",
+            handler: Arc::new(Box::new(|| {})),
+        }];
+
+        let test_found = find_test_closest_to_line(all_tests, 1337);
+
+        assert_eq!(test_found.unwrap().name, "foo");
+    }
 }
